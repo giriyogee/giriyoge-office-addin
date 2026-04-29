@@ -1,0 +1,88 @@
+.taskpane-shell {
+  min-height: 100vh;
+  padding: 24px;
+  background: #f7f7f7;
+}
+
+.hero {
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  max-width: 520px;
+}
+
+.eyebrow {
+  margin: 0;
+  color: #616161;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 0;
+  color: #242424;
+  font-size: 28px;
+  font-weight: 600;
+  line-height: 1.2;
+}
+
+.primary-action {
+  width: fit-content;
+  min-height: 36px;
+  padding: 8px 14px;
+  border: 1px solid #185abd;
+  border-radius: 4px;
+  background: #185abd;
+  color: #fff;
+  cursor: pointer;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.primary-action:disabled {
+  border-color: #bdbdbd;
+  background: #d1d1d1;
+  color: #616161;
+  cursor: progress;
+}
+
+.primary-action:not(:disabled):hover {
+  background: #0f4aa8;
+}
+
+.status {
+  margin: 0;
+  color: #424242;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.environment-summary {
+  display: grid;
+  gap: 12px;
+  margin: 8px 0 0;
+  padding: 0;
+}
+
+.environment-summary div {
+  display: grid;
+  gap: 4px;
+  padding-block: 12px;
+  border-top: 1px solid #d1d1d1;
+}
+
+dt {
+  color: #616161;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+dd {
+  margin: 0;
+  color: #1f1f1f;
+  font-size: 14px;
+  overflow-wrap: anywhere;
+}

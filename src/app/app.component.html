@@ -1,0 +1,22 @@
+<main class="taskpane-shell" aria-label="Giriyoge Word add-in task pane">
+  <section class="hero">
+    <p class="eyebrow">Microsoft Word Add-in</p>
+    <h1>{{ message() }}</h1>
+    <button class="primary-action" type="button" [disabled]="isInserting()" (click)="insertParagraph()">
+      {{ isInserting() ? 'Inserting...' : 'Insert paragraph' }}
+    </button>
+    @if (statusMessage()) {
+      <p class="status" role="status">{{ statusMessage() }}</p>
+    }
+    <dl class="environment-summary" aria-label="Environment configuration">
+      <div>
+        <dt>Environment</dt>
+        <dd>{{ config.name }}</dd>
+      </div>
+      <div>
+        <dt>Endpoint</dt>
+        <dd>{{ config.sourceLocation }}</dd>
+      </div>
+    </dl>
+  </section>
+</main>
