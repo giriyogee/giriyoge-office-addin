@@ -2,25 +2,28 @@ using System;
 using System.IO;
 using System.Runtime.InteropServices;
 using System.Threading;
+using System.Windows.Forms;
 using Excel = Microsoft.Office.Interop.Excel;
 
-public static class EmfExporter
+public static class OfficeVectorExporter
 {
-    // Windows clipboard format for Enhanced Metafile.
     private const uint CF_ENHMETAFILE = 14;
 
-    // --------------------------------------------------------------------
-    // CHART
-    // --------------------------------------------------------------------
+    private const string SvgClipboardFormat = "image/svg+xml";
 
-    public static string ExportChartToEmf(
+
+    // ============================================================
+    // CHART
+    // ============================================================
+
+    public static string ExportChart(
         Excel.Chart chart,
         string outputPath)
     {
         if (chart == null)
             throw new ArgumentNullException(nameof(chart));
 
-        return ExportUsingClipboard(
+        return CopyAndExport(
             () =>
             {
                 chart.CopyPicture(
@@ -32,27 +35,21 @@ public static class EmfExporter
     }
 
 
-    // --------------------------------------------------------------------
+    // ============================================================
     // GROUP CHART / GROUPED SHAPE
-    // --------------------------------------------------------------------
+    // ============================================================
 
-    public static string ExportGroupChartToEmf(
-        Excel.Shape groupShape,
+    public static string ExportGroupChart(
+        Excel.Shape shape,
         string outputPath)
     {
-        if (groupShape == null)
-            throw new ArgumentNullException(nameof(groupShape));
+        if (shape == null)
+            throw new ArgumentNullException(nameof(shape));
 
-        return ExportUsingClipboard(
+        return CopyAndExport(
             () =>
             {
-                /*
-                 * xlPicture is the important part.
-                 *
-                 * xlPicture -> vector / EMF
-                 * xlBitmap  -> raster / bitmap
-                 */
-                groupShape.CopyPicture(
+                shape.CopyPicture(
                     Excel.XlPictureAppearance.xlScreen,
                     Excel.XlCopyPictureFormat.xlPicture);
             },
@@ -60,25 +57,20 @@ public static class EmfExporter
     }
 
 
-    // --------------------------------------------------------------------
+    // ============================================================
     // TABLE / RANGE
-    // --------------------------------------------------------------------
+    // ============================================================
 
-    public static string ExportTableToEmf(
+    public static string ExportTable(
         Excel.Range range,
         string outputPath)
     {
         if (range == null)
             throw new ArgumentNullException(nameof(range));
 
-        return ExportUsingClipboard(
+        return CopyAndExport(
             () =>
             {
-                /*
-                 * Excel generates the picture representation of the range.
-                 *
-                 * xlPicture is required to get the vector representation.
-                 */
                 range.CopyPicture(
                     Excel.XlPictureAppearance.xlScreen,
                     Excel.XlCopyPictureFormat.xlPicture);
@@ -87,11 +79,11 @@ public static class EmfExporter
     }
 
 
-    // --------------------------------------------------------------------
-    // COMMON EXPORT PIPELINE
-    // --------------------------------------------------------------------
+    // ============================================================
+    // COMMON COPY / EXPORT
+    // ============================================================
 
-    private static string ExportUsingClipboard(
+    private static string CopyAndExport(
         Action copyAction,
         string outputPath)
     {
@@ -106,91 +98,271 @@ public static class EmfExporter
         string directory = Path.GetDirectoryName(outputPath);
 
         if (!string.IsNullOrEmpty(directory))
-        {
             Directory.CreateDirectory(directory);
+
+        DeleteIfExists(outputPath);
+
+        // Make sure an old clipboard value is not accidentally used.
+        try
+        {
+            Clipboard.Clear();
+        }
+        catch
+        {
+            // Clipboard may be temporarily unavailable.
+            // We will still attempt the Excel copy.
         }
 
-        DeleteExistingFile(outputPath);
+        // --------------------------------------------------------
+        // Excel native copy
+        // --------------------------------------------------------
 
-        ClearClipboard();
-
-        // Execute Excel's native copy operation.
         copyAction();
 
-        // Excel may populate the clipboard asynchronously.
-        IntPtr hEmf = WaitForEnhancedMetafile(5000);
+        // Wait for Excel to populate clipboard.
+        IDataObject data = WaitForClipboardData(5000);
 
-        if (hEmf == IntPtr.Zero)
+        if (data == null)
         {
             throw new InvalidOperationException(
-                "Excel did not place an Enhanced Metafile (EMF) on the clipboard.");
+                "Excel did not place the copied object on the clipboard.");
         }
 
-        try
+        // --------------------------------------------------------
+        // First preference: SVG
+        // --------------------------------------------------------
+
+        if (TrySaveSvg(data, outputPath))
         {
-            SaveEnhancedMetafile(hEmf, outputPath);
-        }
-        finally
-        {
-            // Clipboard owns the handle. Do NOT DeleteEnhMetaFile here.
+            return outputPath;
         }
 
-        if (!File.Exists(outputPath))
+        // --------------------------------------------------------
+        // Second preference: EMF
+        // --------------------------------------------------------
+
+        if (TrySaveEmfFromClipboard(outputPath))
         {
-            throw new IOException(
-                "Failed to create EMF file: " + outputPath);
+            return outputPath;
         }
 
-        return outputPath;
+        throw new InvalidOperationException(
+            "Excel copied the object, but neither SVG nor EMF " +
+            "was available on the clipboard.");
     }
 
 
-    // --------------------------------------------------------------------
-    // CLIPBOARD
-    // --------------------------------------------------------------------
+    // ============================================================
+    // WAIT FOR CLIPBOARD
+    // ============================================================
 
-    private static void ClearClipboard()
-    {
-        if (!OpenClipboard(IntPtr.Zero))
-            return;
-
-        try
-        {
-            EmptyClipboard();
-        }
-        finally
-        {
-            CloseClipboard();
-        }
-    }
-
-
-    private static IntPtr WaitForEnhancedMetafile(int timeoutMs)
+    private static IDataObject WaitForClipboardData(
+        int timeoutMilliseconds)
     {
         DateTime start = DateTime.UtcNow;
 
-        while ((DateTime.UtcNow - start).TotalMilliseconds < timeoutMs)
+        while (
+            (DateTime.UtcNow - start).TotalMilliseconds
+            < timeoutMilliseconds)
         {
-            IntPtr hEmf = GetEnhancedMetafileFromClipboard();
+            try
+            {
+                IDataObject data = Clipboard.GetDataObject();
 
-            if (hEmf != IntPtr.Zero)
-                return hEmf;
+                if (data != null)
+                {
+                    string[] formats = data.GetFormats();
+
+                    if (formats != null && formats.Length > 0)
+                    {
+                        return data;
+                    }
+                }
+            }
+            catch
+            {
+                // Clipboard can be locked temporarily by Excel.
+            }
 
             Thread.Sleep(50);
         }
 
-        return IntPtr.Zero;
+        return null;
     }
 
 
-    private static IntPtr GetEnhancedMetafileFromClipboard()
+    // ============================================================
+    // SVG
+    // ============================================================
+
+    private static bool TrySaveSvg(
+        IDataObject data,
+        string outputPath)
     {
-        if (!OpenClipboard(IntPtr.Zero))
-            return IntPtr.Zero;
+        if (data == null)
+            return false;
 
         try
         {
-            return GetClipboardData(CF_ENHMETAFILE);
+            string[] formats = data.GetFormats();
+
+            if (formats == null)
+                return false;
+
+            string svgFormat = FindSvgFormat(formats);
+
+            if (svgFormat == null)
+                return false;
+
+            object svgData = data.GetData(svgFormat);
+
+            if (svgData == null)
+                return false;
+
+            // ----------------------------------------------------
+            // Case 1: SVG comes back as string
+            // ----------------------------------------------------
+
+            if (svgData is string svgString)
+            {
+                if (!LooksLikeSvg(svgString))
+                    return false;
+
+                File.WriteAllText(
+                    outputPath,
+                    svgString,
+                    System.Text.Encoding.UTF8);
+
+                return File.Exists(outputPath);
+            }
+
+            // ----------------------------------------------------
+            // Case 2: SVG comes back as byte[]
+            // ----------------------------------------------------
+
+            if (svgData is byte[] svgBytes)
+            {
+                if (svgBytes.Length == 0)
+                    return false;
+
+                File.WriteAllBytes(
+                    outputPath,
+                    svgBytes);
+
+                return File.Exists(outputPath);
+            }
+
+            // ----------------------------------------------------
+            // Case 3: MemoryStream
+            // ----------------------------------------------------
+
+            if (svgData is MemoryStream memoryStream)
+            {
+                byte[] bytes = memoryStream.ToArray();
+
+                if (bytes.Length == 0)
+                    return false;
+
+                File.WriteAllBytes(
+                    outputPath,
+                    bytes);
+
+                return File.Exists(outputPath);
+            }
+        }
+        catch
+        {
+            // SVG extraction failed.
+            // Caller will try EMF.
+        }
+
+        return false;
+    }
+
+
+    private static string FindSvgFormat(
+        string[] formats)
+    {
+        foreach (string format in formats)
+        {
+            if (string.IsNullOrEmpty(format))
+                continue;
+
+            if (string.Equals(
+                    format,
+                    SvgClipboardFormat,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return format;
+            }
+
+            // Some applications expose SVG with slightly
+            // different naming.
+            if (format.IndexOf(
+                    "svg",
+                    StringComparison.OrdinalIgnoreCase) >= 0)
+            {
+                return format;
+            }
+        }
+
+        return null;
+    }
+
+
+    private static bool LooksLikeSvg(string value)
+    {
+        if (string.IsNullOrWhiteSpace(value))
+            return false;
+
+        return value.IndexOf(
+                   "<svg",
+                   StringComparison.OrdinalIgnoreCase) >= 0;
+    }
+
+
+    // ============================================================
+    // EMF
+    // ============================================================
+
+    private static bool TrySaveEmfFromClipboard(
+        string outputPath)
+    {
+        IntPtr hEmf = IntPtr.Zero;
+
+        if (!OpenClipboard(IntPtr.Zero))
+            return false;
+
+        try
+        {
+            hEmf = GetClipboardData(CF_ENHMETAFILE);
+
+            if (hEmf == IntPtr.Zero)
+                return false;
+
+            uint size = GetEnhMetaFileBits(
+                hEmf,
+                0,
+                null);
+
+            if (size == 0)
+                return false;
+
+            byte[] emfBytes = new byte[size];
+
+            uint written = GetEnhMetaFileBits(
+                hEmf,
+                size,
+                emfBytes);
+
+            if (written == 0)
+                return false;
+
+            File.WriteAllBytes(
+                outputPath,
+                emfBytes);
+
+            return File.Exists(outputPath);
         }
         finally
         {
@@ -199,78 +371,39 @@ public static class EmfExporter
     }
 
 
-    // --------------------------------------------------------------------
-    // SAVE EMF
-    // --------------------------------------------------------------------
+    // ============================================================
+    // FILE HELPERS
+    // ============================================================
 
-    private static void SaveEnhancedMetafile(
-        IntPtr hEmf,
-        string outputPath)
+    private static void DeleteIfExists(
+        string path)
     {
-        if (hEmf == IntPtr.Zero)
-            throw new ArgumentNullException(nameof(hEmf));
-
-        uint size = GetEnhMetaFileBits(
-            hEmf,
-            0,
-            null);
-
-        if (size == 0)
-        {
-            throw new InvalidOperationException(
-                "Unable to read Enhanced Metafile data.");
-        }
-
-        byte[] emfData = new byte[size];
-
-        uint written = GetEnhMetaFileBits(
-            hEmf,
-            size,
-            emfData);
-
-        if (written == 0)
-        {
-            throw new InvalidOperationException(
-                "Unable to extract Enhanced Metafile data.");
-        }
-
-        File.WriteAllBytes(outputPath, emfData);
-    }
-
-
-    private static void DeleteExistingFile(string path)
-    {
-        if (!File.Exists(path))
-            return;
-
-        try
+        if (File.Exists(path))
         {
             File.Delete(path);
         }
-        catch (IOException)
-        {
-            // Sometimes Excel/Word still has the previous EMF open.
-            // Let the caller receive a useful error.
-            throw;
-        }
     }
 
 
-    // --------------------------------------------------------------------
-    // WIN32
-    // --------------------------------------------------------------------
+    // ============================================================
+    // WIN32 CLIPBOARD
+    // ============================================================
 
     [DllImport("user32.dll")]
-    private static extern bool OpenClipboard(IntPtr hWndNewOwner);
+    private static extern bool OpenClipboard(
+        IntPtr hWndNewOwner);
 
     [DllImport("user32.dll")]
     private static extern bool CloseClipboard();
 
     [DllImport("user32.dll")]
-    private static extern bool EmptyClipboard();
+    private static extern IntPtr GetClipboardData(
+        uint uFormat);
 
-    [DllImport("user32.dll")]
-    private static extern IntPtr GetClipboardData(uint uFormat);
+
+    // ============================================================
+    // WIN32 EMF
+    // ============================================================
 
     [DllImport("gdi32.dll")]
     private static extern uint GetEnhMetaFileBits(
