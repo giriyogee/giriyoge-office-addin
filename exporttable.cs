@@ -1,7 +1,3 @@
-// ============================================================
-// TABLE / RANGE
-// ============================================================
-
 public static string ExportTable(
     Excel.Range range,
     string outputPath)
@@ -13,38 +9,41 @@ public static string ExportTable(
         throw new ArgumentNullException(nameof(outputPath));
 
     Excel.Worksheet sourceSheet = null;
+    Excel.Workbook workbook = null;
     Excel.Worksheet tempSheet = null;
+    Excel.Shape picture = null;
     Excel.Shape drawingGroup = null;
 
     try
     {
         sourceSheet = (Excel.Worksheet)range.Worksheet;
+        workbook = (Excel.Workbook)sourceSheet.Parent;
 
         Excel.Application app =
             sourceSheet.Application;
 
-        // ----------------------------------------------------
+        // ====================================================
         // 1. Copy range as EMF
-        // ----------------------------------------------------
+        // ====================================================
 
         range.CopyPicture(
             Excel.XlPictureAppearance.xlScreen,
             Excel.XlCopyPictureFormat.xlPicture);
 
-        // ----------------------------------------------------
-        // 2. Temporary worksheet
-        // ----------------------------------------------------
+        // ====================================================
+        // 2. Create temporary worksheet
+        // ====================================================
 
         tempSheet =
-            (Excel.Worksheet)sourceSheet.Parent.Worksheets.Add(
+            (Excel.Worksheet)workbook.Worksheets.Add(
                 After: sourceSheet);
+
+        // ====================================================
+        // 3. Paste as EMF
+        // ====================================================
 
         int shapeCountBefore =
             tempSheet.Shapes.Count;
-
-        // ----------------------------------------------------
-        // 3. Paste EMF
-        // ----------------------------------------------------
 
         tempSheet.PasteSpecial(
             Format: "Picture (Enhanced Metafile)",
@@ -57,57 +56,70 @@ public static string ExportTable(
                 "Excel did not paste the EMF picture.");
         }
 
-        // The newly pasted EMF picture.
-        Excel.Shape picture =
-            tempSheet.Shapes[tempSheet.Shapes.Count];
+        // ====================================================
+        // 4. Get newly pasted shape
+        // ====================================================
 
-        // ----------------------------------------------------
-        // 4. Select picture
-        // ----------------------------------------------------
+        object shapeIndex =
+            tempSheet.Shapes.Count;
+
+        picture =
+            tempSheet.Shapes.Item(ref shapeIndex);
+
+        // ====================================================
+        // 5. Select picture
+        // ====================================================
 
         picture.Select();
 
-        // ----------------------------------------------------
-        // 5. Queue ENTER BEFORE PictureEdit
-        //
-        // PictureEdit displays:
-        //
-        // "This is a picture. Do you want to convert
-        //  it to a Microsoft Drawing Object?"
-        //
-        // ENTER = Yes
-        // ----------------------------------------------------
+        // ====================================================
+        // 6. Queue ENTER BEFORE PictureEdit
+        // ====================================================
 
         System.Windows.Forms.SendKeys.Send("~");
 
-        // ----------------------------------------------------
-        // 6. Excel converts EMF -> Microsoft Drawing Object
-        // ----------------------------------------------------
+        // ====================================================
+        // 7. EMF -> Microsoft Drawing Object
+        // ====================================================
 
         app.CommandBars.ExecuteMso("PictureEdit");
 
-        // ----------------------------------------------------
-        // 7. The resulting object should now be a Group
-        // ----------------------------------------------------
+        // ====================================================
+        // 8. Get resulting drawing group
+        // ====================================================
+
+        object groupIndex =
+            tempSheet.Shapes.Count;
 
         drawingGroup =
-            tempSheet.Shapes[tempSheet.Shapes.Count];
+            tempSheet.Shapes.Item(ref groupIndex);
 
         Debug.WriteLine(
-            "Converted shape: " + drawingGroup.Name);
+            "Converted shape: " +
+            drawingGroup.Name);
 
         Debug.WriteLine(
-            "Converted shape type: " + drawingGroup.Type);
+            "Converted shape type: " +
+            drawingGroup.Type);
 
         Debug.WriteLine(
             "Group items: " +
             drawingGroup.GroupItems.Count);
 
-        // ----------------------------------------------------
-        // 8. THIS IS THE IMPORTANT PART:
-        //
-        // Use the existing SVG clipboard/export mechanism.
-        // ----------------------------------------------------
+        // ====================================================
+        // 9. Validate conversion
+        // ====================================================
+
+        if (drawingGroup.Type !=
+            Microsoft.Office.Core.MsoShapeType.msoGroup)
+        {
+            throw new InvalidOperationException(
+                "PictureEdit did not produce a Microsoft Drawing Object group.");
+        }
+
+        // ====================================================
+        // 10. Use YOUR EXISTING SVG exporter
+        // ====================================================
 
         return CopyAndExport(
             () => drawingGroup.Copy(),
@@ -115,10 +127,7 @@ public static string ExportTable(
     }
     finally
     {
-        // ----------------------------------------------------
-        // 9. Delete temporary worksheet
-        // ----------------------------------------------------
-
+        // Delete temporary sheet after SVG has been obtained
         if (tempSheet != null)
         {
             try
@@ -128,18 +137,21 @@ public static string ExportTable(
             catch
             {
             }
-
-            Marshal.ReleaseComObject(tempSheet);
         }
 
         if (drawingGroup != null)
-        {
             Marshal.ReleaseComObject(drawingGroup);
-        }
+
+        if (picture != null)
+            Marshal.ReleaseComObject(picture);
+
+        if (tempSheet != null)
+            Marshal.ReleaseComObject(tempSheet);
+
+        if (workbook != null)
+            Marshal.ReleaseComObject(workbook);
 
         if (sourceSheet != null)
-        {
             Marshal.ReleaseComObject(sourceSheet);
-        }
     }
 }
